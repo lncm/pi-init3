@@ -1,3 +1,5 @@
+// +build linux
+
 /* pi-init2
  *
  * A shim to drop onto a Raspberry Pi to write some files to its root
@@ -7,33 +9,28 @@
  * 2) having to mount the root partition, which Windows & Mac users can't easily
  * do.
  *
- * Cross-compile on Mac/Linux:
- *   GOOS=linux GOARCH=arm go get golang.org/x/sys/unix
- *   GOOS=linux GOARCH=arm go build pi-init2
- *
- * Cross-compile:
- *   set GOOS=linux
- *   set GOARCH=arm
- *   go build packages pi-init2
+ * Cross-compile for Raspberry Pi:
+ *   go mod sync
+ *   GOOS=linux GOARCH=arm GOARM=5 go build pi-init2
  */
 
 package main
 
 import (
-	"golang.org/x/sys/unix"
 	"fmt"
+	"golang.org/x/sys/unix"
 	"io"
-	"os"
 	"io/ioutil"
+	"os"
 	"strings"
 	"syscall" // for Exec only
 	"time"
 )
 
 var (
-	exists = []syscall.Errno{syscall.EEXIST}
-	service_install_path = "/lib/systemd/system/"
-	service_enable_path  = "/etc/systemd/system/multi-user.target.wants/"
+	exists             = []syscall.Errno{syscall.EEXIST}
+	serviceInstallPath = "/lib/systemd/system/"
+	serviceEnablePath  = "/etc/systemd/system/multi-user.target.wants/"
 )
 
 func checkFatalAllowed(desc string, err error, allowedErrnos []syscall.Errno) {
@@ -77,14 +74,14 @@ func cp(dst, src string) error {
 	return d.Close()
 }
 
-func create_file(filename string, permissions os.FileMode, contents string) {
+func createFile(filename string, permissions os.FileMode, contents string) {
 	ioutil.WriteFile(filename, []byte(strings.TrimLeft(contents, "\r\n\t ")), permissions)
 }
 
-func create_service(name, contents string) error {
-	src := service_install_path + name + ".service"
-	dst := service_enable_path  + name + ".service"
-	create_file(src, 0644, contents)
+func createService(name, contents string) error {
+	src := serviceInstallPath + name + ".service"
+	dst := serviceEnablePath + name + ".service"
+	createFile(src, 0644, contents)
 	err := os.Symlink(src, dst)
 	if err != nil {
 		return err
@@ -92,88 +89,101 @@ func create_service(name, contents string) error {
 	return nil
 }
 
-func remount_rw() {
+func remountRw() {
 	checkFatal(
 		"changing directory",
 		unix.Chdir("/"))
+
 	checkFatal(
 		"remount rw",
 		unix.Mount("/", "/", "vfat", syscall.MS_REMOUNT, ""), )
 }
 
-func mount_tmp(){
+func mountTmp() {
 	checkFatalAllowed(
 		"making tmp",
 		unix.Mkdir("tmp", 0770),
 		exists)
+
 	checkFatal(
 		"mounting tmp",
 		unix.Mount("", "tmp", "tmpfs", 0, ""))
 }
 
-func mount_root(){
+func mountRoot() {
 	checkFatalAllowed(
 		"making new_root",
 		unix.Mkdir("new_root", 0770),
 		exists)
+
 	checkFatal(
 		"create device node",
-		unix.Mknod("tmp/mmcblk0p2", 0660 | syscall.S_IFBLK, 179<<8 | 2))
+		unix.Mknod("tmp/mmcblk0p2", 0660|syscall.S_IFBLK, 179<<8|2))
+
 	checkFatal(
 		"mounting real root",
 		unix.Mount("tmp/mmcblk0p2", "new_root", "ext4", 0, ""))
 }
 
-func adjust_mounts(){
+func adjustMounts() {
 	checkFatal(
 		"pivoting",
 		unix.PivotRoot("new_root", "new_root/boot")) // new_root becomes root FS & current root FS moves to new_root/boot
-		// See: https://linux.die.net/man/8/pivot_root
+
+	// See: https://linux.die.net/man/8/pivot_root
 	checkFatal(
 		"unmounting /boot/tmp",
 		unix.Unmount("/boot/tmp", 0))
+
 	checkFatal(
 		"removing /boot/new_root",
 		os.Remove("/boot/new_root"))
+
 	checkFatal(
 		"removing /boot/tmp",
 		os.Remove("/boot/tmp"))
+
 	checkFatal(
 		"changing into boot directory",
 		unix.Chdir("/boot"))
 }
 
-func replace_cmdline(){
+func replaceCmdline() {
 	checkFatal(
 		"renaming cmdline.txt to cmdline.txt.pi-init2",
 		unix.Rename("/boot/cmdline.txt", "/boot/cmdline.txt.pi-init2"))
+
 	checkFatal(
 		"renaming cmdline.txt.orig to cmdline.txt",
 		unix.Rename("/boot/cmdline.txt.orig", "/boot/cmdline.txt"))
 }
 
-func reboot(){
+func reboot() {
 	unix.Sync()
 	unix.Reboot(unix.LINUX_REBOOT_CMD_RESTART)
 }
 
-func customize(){
+func customize() {
 	checkFatal(
 		"changing into boot directory",
 		unix.Chdir("/boot"))
+
 	checkFatalAllowed(
 		"making on-boot.d",
 		unix.Mkdir("on-boot.d", 0770),
 		exists)
+
 	checkFatalAllowed(
 		"making run-once.d",
 		unix.Mkdir("run-once.d", 0770),
 		exists)
+
 	checkFatalAllowed(
 		"making run-once.d/completed",
 		unix.Mkdir("run-once.d/completed", 0770),
 		exists)
-	create_file("/usr/local/sbin/pi-init2-run-parts.sh", 0744, `
+
+	createFile("/usr/local/sbin/pi-init2-run-parts.sh", 0744, `
 #!/bin/bash
 
 # Prevent *.sh from returning itself if there are no matches
@@ -181,13 +191,13 @@ shopt -s nullglob
 
 # Allow lazily named scripts to work
 for script in /boot/run-once*; do
-	if [[ -f $script ]]; then
-		$script
-		status=$?
-		if $(exit $status); then
-			mv $script /boot/run-once.d/completed/
-		fi
-	fi
+    if [[ -f $script ]]; then
+        $script
+        status=$?
+        if $(exit $status); then
+            mv $script /boot/run-once.d/completed/
+        fi
+    fi
 done
 
 # Run every run-once script
@@ -197,18 +207,18 @@ sed -i '/^run-parts: executing/!d;s/^run-parts: executing *//' /tmp/completed
 # Pop last script off the list if run-parts exited on an error
 status=$?
 if ! $(exit $status); then
-	sed -i '$d' /tmp/completed
+    sed -i '$d' /tmp/completed
 fi
 
 # Move completed scripts
 while read script; do
-	mv $script /boot/run-once.d/completed/
+    mv $script /boot/run-once.d/completed/
 done < /tmp/completed
 
 # Run every on-boot script
 run-parts /boot/on-boot.d
 `)
-	create_service("pi-init2",`
+	createService("pi-init2", `
 [Unit]
 Description=Run user provided scripts on boot
 ConditionPathExists=/usr/local/sbin/pi-init2-run-parts.sh
@@ -225,16 +235,16 @@ WantedBy=multi-user.target
 }
 
 func main() {
-	remount_rw()
-	mount_tmp()
-	mount_root()
-	adjust_mounts()
+	remountRw()
+	mountTmp()
+	mountRoot()
+	adjustMounts()
 	customize()
-	replace_cmdline()
-/*
-	checkFatal(
-		"exec real init",
-		syscall.Exec("/sbin/init", os.Args, nil))
-*/
+	replaceCmdline()
+	/*
+		checkFatal(
+			"exec real init",
+			syscall.Exec("/sbin/init", os.Args, nil))
+	*/
 	reboot()
 }
