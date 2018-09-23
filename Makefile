@@ -1,4 +1,4 @@
-all: boot/pi-init3
+all: clean boot/pi-init3
 
 boot/pi-init3:
 	GOOS=linux GOARCH=arm GOARM=5 go build -o boot/pi-init3 .
