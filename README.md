@@ -24,6 +24,12 @@ You will need `golang` installed (I'm currently using 1.7) `sudo apt install gol
 
 There is a `Makefile` in the root of this project. Calling `make` will compile the [Go](https://golang.org/) source code and create `boot/pi-init3` if it doesn't exist. (Use `make clean all` to replace it.)
 
+Alternatively, you can do the following
+
+```bash
+GOOS=linux GOARCH=arm GOARM=5 go build -o boot/pi-init3 .
+```
+
 # How it works
 
 This is really cool. The `cmdline.txt` specifies an `init=/pi-init3` kernel argument to use a
